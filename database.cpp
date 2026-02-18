@@ -1596,3 +1596,250 @@ QList<QVariantMap> Database::getWriteOffHistory(int itemId)
 
     return history;
 }
+
+Database::DashboardStats Database::getDashboardStats()
+{
+    DashboardStats stats;
+    stats.totalItems = 0;
+    stats.availableItems = 0;
+    stats.writtenOffItems = 0;
+
+    QSqlQuery query;
+
+    // Общее количество
+    if (query.exec("SELECT COUNT(*) FROM inventory") && query.next()) {
+        stats.totalItems = query.value(0).toInt();
+    }
+
+    // По статусам
+    query.exec("SELECT status, COUNT(*) FROM inventory GROUP BY status");
+    while (query.next()) {
+        QString status = query.value(0).toString();
+        int count = query.value(1).toInt();
+        if (status == "available") {
+            stats.availableItems = count;
+        } else if (status == "written_off") {
+            stats.writtenOffItems = count;
+        }
+    }
+
+    // По типам материалов
+    query.exec("SELECT mt.name, COUNT(*) FROM inventory i "
+               "JOIN material_types mt ON i.material_type_id = mt.id "
+               "GROUP BY mt.name ORDER BY COUNT(*) DESC LIMIT 10");
+    while (query.next()) {
+        stats.itemsByType[query.value(0).toString()] = query.value(1).toInt();
+    }
+
+    // По производителям
+    query.exec("SELECT m.name, COUNT(*) FROM inventory i "
+               "JOIN manufacturers m ON i.manufacturer_id = m.id "
+               "GROUP BY m.name ORDER BY COUNT(*) DESC LIMIT 10");
+    while (query.next()) {
+        stats.itemsByManufacturer[query.value(0).toString()] = query.value(1).toInt();
+    }
+
+    // Недавняя активность (последние 10 добавлений/изменений)
+    query.exec("SELECT 'Добавлено: ' || mt.name || ' ' || m.name || ' (' || i.serial_number || ')' as text, "
+               "i.created_at as date FROM inventory i "
+               "JOIN material_types mt ON i.material_type_id = mt.id "
+               "JOIN models m ON i.model_id = m.id "
+               "WHERE i.created_at IS NOT NULL "
+               "ORDER BY i.created_at DESC LIMIT 5");
+    while (query.next()) {
+        QString text = query.value(0).toString();
+        QString date = query.value(1).toDateTime().toString("dd.MM.yyyy HH:mm");
+        stats.recentActivity.append(qMakePair(text, date)); // Теперь оба QString
+    }
+
+    return stats;
+}
+
+QList<QPair<QDate, int>> Database::getMonthlyStats(int months)
+{
+    QList<QPair<QDate, int>> stats;
+    // QDate currentDate = QDate::currentDate();
+
+    QSqlQuery query;
+    query.prepare("SELECT strftime('%Y-%m', arrival_date) as month, COUNT(*) "
+                  "FROM inventory "
+                  "WHERE arrival_date >= date('now', ?) "
+                  "GROUP BY month ORDER BY month");
+
+    QString startDate = QString("-%1 months").arg(months);
+    query.addBindValue(startDate);
+
+    if (query.exec()) {
+        while (query.next()) {
+            QString monthStr = query.value(0).toString();
+            int count = query.value(1).toInt();
+            QDate date = QDate::fromString(monthStr + "-01", "yyyy-MM-dd");
+            stats.append(qMakePair(date, count));
+        }
+    }
+
+    return stats;
+}
+
+QList<QVariantMap> Database::getItemsForLabels(const QList<int> &itemIds)
+{
+    QList<QVariantMap> items;
+
+    if (itemIds.isEmpty()) {
+        return items;
+    }
+
+    QString ids;
+    for (int i = 0; i < itemIds.size(); ++i) {
+        if (i > 0) ids += ",";
+        ids += QString::number(itemIds[i]);
+    }
+
+    QString sql =
+        "SELECT i.id, mt.name as material_type, man.name as manufacturer, "
+        "m.name as model, i.part_number, i.serial_number, i.capacity, "
+        "i.arrival_date "
+        "FROM inventory i "
+        "JOIN material_types mt ON i.material_type_id = mt.id "
+        "JOIN manufacturers man ON i.manufacturer_id = man.id "
+        "JOIN models m ON i.model_id = m.id "
+        "WHERE i.id IN (" + ids + ")";
+
+    QSqlQuery query;
+    if (query.exec(sql)) {
+        while (query.next()) {
+            QVariantMap item;
+            item["id"] = query.value("id");
+            item["material_type"] = query.value("material_type");
+            item["manufacturer"] = query.value("manufacturer");
+            item["model"] = query.value("model");
+            item["part_number"] = query.value("part_number");
+            item["serial_number"] = query.value("serial_number");
+            item["capacity"] = query.value("capacity");
+            item["arrival_date"] = query.value("arrival_date");
+            items.append(item);
+        }
+    }
+
+    return items;
+}
+
+QList<QVariantMap> Database::getFilteredInventory(const QString &materialType,
+                                                  const QString &manufacturer,
+                                                  const QString &model,
+                                                  const QString &partNumber,
+                                                  const QString &serialNumber,
+                                                  const QString &status,
+                                                  const QDate &dateFrom,
+                                                  const QDate &dateTo)
+{
+    QList<QVariantMap> items;
+    QStringList conditions;
+    QVariantList bindValues;
+
+    qDebug() << "=== getFilteredInventory ===";
+    qDebug() << "materialType:" << materialType;
+    qDebug() << "manufacturer:" << manufacturer;
+    qDebug() << "model:" << model;
+    qDebug() << "partNumber:" << partNumber;
+    qDebug() << "serialNumber:" << serialNumber;
+    qDebug() << "status:" << status;
+    qDebug() << "dateFrom:" << dateFrom;
+    qDebug() << "dateTo:" << dateTo;
+
+    QString sql =
+        "SELECT i.id, i.status, mt.name as material_type, man.name as manufacturer, "
+        "m.name as model, i.part_number, i.serial_number, i.capacity, "
+        "i.interface_type, i.notes, i.arrival_date, i.invoice_number "
+        "FROM inventory i "
+        "JOIN material_types mt ON i.material_type_id = mt.id "
+        "JOIN manufacturers man ON i.manufacturer_id = man.id "
+        "JOIN models m ON i.model_id = m.id "
+        "WHERE 1=1";
+
+    if (!materialType.isEmpty()) {
+        sql += " AND mt.name = ?";
+        bindValues << materialType;
+        qDebug() << "Adding material condition:" << materialType;
+    }
+
+    if (!manufacturer.isEmpty()) {
+        sql += " AND man.name = ?";
+        bindValues << manufacturer;
+        qDebug() << "Adding manufacturer condition:" << manufacturer;
+    }
+
+    if (!model.isEmpty()) {
+        sql += " AND m.name = ?";
+        bindValues << model;
+        qDebug() << "Adding model condition:" << model;
+    }
+
+    if (!partNumber.isEmpty()) {
+        sql += " AND i.part_number LIKE ?";
+        bindValues << "%" + partNumber + "%";
+        qDebug() << "Adding partNumber condition:" << partNumber;
+    }
+
+    if (!serialNumber.isEmpty()) {
+        sql += " AND i.serial_number LIKE ?";
+        bindValues << "%" + serialNumber + "%";
+        qDebug() << "Adding serialNumber condition:" << serialNumber;
+    }
+
+    if (!status.isEmpty() && status != "all") {
+        sql += " AND i.status = ?";
+        bindValues << status;
+        qDebug() << "Adding status condition:" << status;
+    }
+
+    if (dateFrom.isValid()) {
+        sql += " AND i.arrival_date >= ?";
+        bindValues << dateFrom.toString("yyyy-MM-dd");
+        qDebug() << "Adding dateFrom condition:" << dateFrom.toString("yyyy-MM-dd");
+    }
+
+    if (dateTo.isValid()) {
+        sql += " AND i.arrival_date <= ?";
+        bindValues << dateTo.toString("yyyy-MM-dd");
+        qDebug() << "Adding dateTo condition:" << dateTo.toString("yyyy-MM-dd");
+    }
+
+    sql += " ORDER BY i.arrival_date DESC, i.id DESC";
+
+    qDebug() << "Final SQL:" << sql;
+    qDebug() << "Bind values count:" << bindValues.size();
+
+    QSqlQuery query;
+    query.prepare(sql);
+
+    for (int i = 0; i < bindValues.size(); ++i) {
+        query.addBindValue(bindValues[i]);
+        qDebug() << "Bind value" << i << ":" << bindValues[i].toString();
+    }
+
+    if (query.exec()) {
+        qDebug() << "Query executed successfully, rows returned:" << query.size();
+        while (query.next()) {
+            QVariantMap item;
+            item["id"] = query.value("id");
+            item["status"] = query.value("status");
+            item["material_type"] = query.value("material_type");
+            item["manufacturer"] = query.value("manufacturer");
+            item["model"] = query.value("model");
+            item["part_number"] = query.value("part_number");
+            item["serial_number"] = query.value("serial_number");
+            item["capacity"] = query.value("capacity");
+            item["interface_type"] = query.value("interface_type");
+            item["notes"] = query.value("notes");
+            item["arrival_date"] = query.value("arrival_date");
+            item["invoice_number"] = query.value("invoice_number");
+            items.append(item);
+        }
+        qDebug() << "Items found:" << items.size();
+    } else {
+        qDebug() << "Query error:" << query.lastError().text();
+    }
+
+    return items;
+}

@@ -6,6 +6,10 @@
 #include <QStandardItemModel>
 #include <QTreeWidgetItem>
 #include <QMenu>
+#include "dashboardwidget.h"
+#include "advancedfilterdialog.h"
+
+
 
 // Добавляем forward declaration
 class QComboBox;
@@ -39,6 +43,7 @@ private slots:
     void onTreeItemClicked(QTreeWidgetItem *item, int column);
     void onTableSelectionChanged();
     void updateInterfaceVisibility();
+    void onPrintLabels();
 
     void onSortByDateDesc();
     void onSortByDateAsc();
@@ -58,6 +63,10 @@ private slots:
     void onShowWriteOffHistory();
     void onStatusFilterChanged();
 
+    void refreshStats();
+
+    void onAdvancedFilter();
+
 private:
     Ui::MainWindow *ui;
     Database *db;
@@ -67,6 +76,7 @@ private:
     QStandardItemModel *materialModel;
     QStandardItemModel *manufacturerModel;
     QStandardItemModel *modelModel;
+    DashboardWidget *dashboardWidget;
 
     QMenu *sortMenu;
     QAction *sortByDateDescAction;
@@ -75,6 +85,7 @@ private:
     QAction *sortByManufacturerAction;
     QAction *sortByModelAction;
     QAction *sortBySerialAction;
+    void about();
 
     // Для контекстного меню
     QMenu *treeContextMenu;

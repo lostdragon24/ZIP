@@ -1,4 +1,4 @@
-QT       += core gui sql
+QT       += core gui sql printsupport svg
 
 greaterThan(QT_MAJOR_VERSION, 5): QT += widgets
 
@@ -9,13 +9,23 @@ CONFIG += c++17
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    QrCodeGenerator.cpp \
     main.cpp \
     mainwindow.cpp \
-    database.cpp
+    database.cpp \
+    dashboardwidget.cpp \
+    labelprintdialog.cpp \
+    advancedfilterdialog.cpp \
+    qrcodegen.cpp
 
 HEADERS += \
+    QrCodeGenerator.h \
     mainwindow.h \
-    database.h
+    database.h \
+    dashboardwidget.h \
+    labelprintdialog.h \
+    advancedfilterdialog.h \
+    qrcodegen.h
 
 FORMS += \
     mainwindow.ui

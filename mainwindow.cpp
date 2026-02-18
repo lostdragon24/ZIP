@@ -15,6 +15,11 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QSplitter>
+#include <QTimer>
+
+#include "labelprintdialog.h"
+#include "advancedfilterdialog.h"
 
 
 MainWindow::MainWindow(QWidget *parent)
@@ -43,20 +48,40 @@ MainWindow::MainWindow(QWidget *parent)
 
 
     if (!db->initDatabase()) {
-        QMessageBox::critical(this, "Ошибка", "Не удалось инициализировать базу данных");
-        return;
+            QMessageBox::critical(this, "Ошибка", "Не удалось инициализировать базу данных");
+            return;
+        }
+
+        setupUI();
+        setupConnections();
+        setupSortMenu();
+        refreshCompleters();
+        loadMaterialsTree();
+        loadInventoryTable();
+
+        ui->arrivalDateEdit->setDate(QDate::currentDate());
+        updateInterfaceVisibility();
+
+        connect(ui->actionAbout, &QAction::triggered, this, &MainWindow::about);
+
+        // НЕ СОЗДАЕМ НОВЫЙ виджет, а используем существующий из UI
+            dashboardWidget = ui->dashboardWidget;  // Просто присваиваем указатель
+
+            // Устанавливаем database для существующего виджета
+            dashboardWidget->setDatabase(db);
+
+            // Убедимся, что виджет видим
+            dashboardWidget->setVisible(true);
+
+            // Подключаем обновление статистики при переключении на вкладку
+            connect(ui->tabWidget, &QTabWidget::currentChanged, [this](int index) {
+                if (index == 2) { // Индекс вкладки статистики
+                    qDebug() << "Stats tab activated, refreshing...";
+                    dashboardWidget->refreshStats();
+                }
+            });
+
     }
-
-    setupUI();
-    setupConnections();
-    setupSortMenu();
-    refreshCompleters();
-    loadMaterialsTree();
-    loadInventoryTable();
-
-    ui->arrivalDateEdit->setDate(QDate::currentDate());
-    updateInterfaceVisibility();
-}
 
 MainWindow::~MainWindow()
 {
@@ -130,6 +155,39 @@ void MainWindow::setupUI()
     ui->modelCombo->setCompleter(modelCompleter);
     ui->modelCombo->setInsertPolicy(QComboBox::InsertAtTop);
 
+
+    // Создаем сплиттер
+        QSplitter *splitter = new QSplitter(Qt::Horizontal, ui->centralwidget);
+        splitter->addWidget(ui->leftFrame);
+        splitter->addWidget(ui->tabWidget);
+
+        // Устанавливаем начальное процентное соотношение
+        QTimer::singleShot(100, [splitter, this]() {
+            int totalWidth = ui->centralwidget->width();
+            if (totalWidth > 0) {
+                QList<int> sizes;
+                sizes << totalWidth * 25 / 100;  // 25%
+                sizes << totalWidth * 75 / 100;  // 75%
+                splitter->setSizes(sizes);
+            }
+        });
+
+        // Сохраняем возможность пользователя изменять размеры
+        splitter->setChildrenCollapsible(false);
+
+        // Удаляем старый layout и добавляем новый со сплиттером
+        QLayout *oldLayout = ui->centralwidget->layout();
+        if (oldLayout) {
+            delete oldLayout;
+        }
+
+        QHBoxLayout *newLayout = new QHBoxLayout(ui->centralwidget);
+        newLayout->addWidget(splitter);
+
+        // Устанавливаем ограничения для leftFrame
+        ui->leftFrame->setMinimumWidth(200);
+        // Не ставим maximumWidth, чтобы пользователь мог расширять
+
     // Интерфейсы
     QStringList interfaces = {"", "SATA I", "SATA II", "SATA III", "IDE", "SAS",
                              "NVMe PCIe 3.0", "NVMe PCIe 4.0", "NVMe PCIe 5.0",
@@ -147,7 +205,7 @@ void MainWindow::setupUI()
 
     // Настройка дерева
     ui->materialsTree->setHeaderHidden(true);
-    ui->leftFrame->setMaximumWidth(350);
+    ui->leftFrame->setMaximumWidth(550);
 
     // DateEdit
     ui->arrivalDateEdit->setDisplayFormat("dd.MM.yyyy");
@@ -189,6 +247,8 @@ void MainWindow::setupUI()
     connect(ui->refreshTreeButton, &QPushButton::clicked, this, &MainWindow::onRefreshTree);
     connect(ui->deleteFromTreeButton, &QPushButton::clicked, this, &MainWindow::onDeleteFromTree);
 
+    connect(ui->advancedFilterButton, &QPushButton::clicked, this, &MainWindow::onAdvancedFilter);
+
     // Автоматическое включение/выключение кнопки удаления
     connect(ui->materialsTree, &QTreeWidget::itemSelectionChanged, [this]() {
         QTreeWidgetItem* item = ui->materialsTree->currentItem();
@@ -196,6 +256,7 @@ void MainWindow::setupUI()
         ui->deleteFromTreeButton->setEnabled(enableDelete);
     });
 
+    connect(ui->printLabelsButton, &QPushButton::clicked, this, &MainWindow::onPrintLabels);
 
     // Добавляем фильтр статуса
     QHBoxLayout *filterLayout = new QHBoxLayout();
@@ -369,7 +430,14 @@ void MainWindow::setEditMode(bool editMode)
         // Серийный номер теперь можно менять всегда
     } else {
         ui->inputGroupBox->setTitle("Добавление новой позиции");
+
     }
+
+    if (dashboardWidget) {
+        dashboardWidget->refreshStats();
+    }
+
+
 }
 
 void MainWindow::updateInterfaceVisibility()
@@ -932,6 +1000,7 @@ void MainWindow::onDeleteItem()
             loadInventoryTable();
             ui->editButton->setEnabled(false);
             ui->deleteButton->setEnabled(false);
+            dashboardWidget->refreshStats();
         } else {
             QMessageBox::critical(this, "Ошибка", "Не удалось удалить запись");
         }
@@ -1474,3 +1543,193 @@ void MainWindow::onSortBySerial()
     ui->sortButton->setText("📊 Сортировка: по серийному номеру");
 }
 
+void MainWindow::onPrintLabels()
+{
+    // Получаем выбранные элементы
+    QList<int> selectedIds;
+    QList<QTableWidgetItem*> selectedItems = ui->inventoryTable->selectedItems();
+
+    if (selectedItems.isEmpty()) {
+        // Если ничего не выбрано, печатаем все видимые
+        for (int row = 0; row < ui->inventoryTable->rowCount(); ++row) {
+            bool ok;
+            int id = ui->inventoryTable->item(row, 0)->text().toInt(&ok);
+            if (ok) {
+                selectedIds.append(id);
+            }
+        }
+    } else {
+        // Печатаем только выбранные
+        QSet<int> rows;
+        for (QTableWidgetItem *item : selectedItems) {
+            rows.insert(item->row());
+        }
+        for (int row : rows) {
+            bool ok;
+            int id = ui->inventoryTable->item(row, 0)->text().toInt(&ok);
+            if (ok) {
+                selectedIds.append(id);
+            }
+        }
+    }
+
+    if (selectedIds.isEmpty()) {
+        QMessageBox::warning(this, "Внимание", "Нет позиций для печати");
+        return;
+    }
+
+    // Получаем данные из БД
+    QList<QVariantMap> items = db->getItemsForLabels(selectedIds);
+
+    if (items.isEmpty()) {
+        QMessageBox::warning(this, "Ошибка", "Не удалось загрузить данные для печати");
+        return;
+    }
+
+    // Показываем диалог печати
+    LabelPrintDialog dialog(items, this);
+    dialog.exec();
+}
+
+void MainWindow::onAdvancedFilter()
+{
+    AdvancedFilterDialog dialog(this);
+
+    // Заполняем списки данными из БД
+    QComboBox *materialCombo = dialog.findChild<QComboBox*>("materialTypeCombo");
+    if (materialCombo) {
+        materialCombo->clear();
+        materialCombo->addItem("Все типы", "");  // Добавляем с пустыми данными
+        QStringList materials = db->getMaterialTypes();
+        for (const QString &material : materials) {
+            materialCombo->addItem(material, material);  // Добавляем с данными = тексту
+        }
+        materialCombo->setEditable(true);
+        materialCombo->setCurrentIndex(0);
+    }
+
+    QComboBox *manufacturerCombo = dialog.findChild<QComboBox*>("manufacturerCombo");
+    if (manufacturerCombo) {
+        manufacturerCombo->clear();
+        manufacturerCombo->addItem("Все производители", "");
+        QStringList manufacturers = db->getManufacturers();
+        for (const QString &manufacturer : manufacturers) {
+            manufacturerCombo->addItem(manufacturer, manufacturer);
+        }
+        manufacturerCombo->setEditable(true);
+        manufacturerCombo->setCurrentIndex(0);
+    }
+
+    QComboBox *modelCombo = dialog.findChild<QComboBox*>("modelCombo");
+    if (modelCombo) {
+        modelCombo->clear();
+        modelCombo->addItem("Все модели", "");
+        modelCombo->setEditable(true);
+        modelCombo->setCurrentIndex(0);
+    }
+
+    // Подключаем обновление моделей
+    if (materialCombo && manufacturerCombo && modelCombo) {
+        auto updateModels = [materialCombo, manufacturerCombo, modelCombo, this]() {
+            QString material = materialCombo->currentText();
+            QString manufacturer = manufacturerCombo->currentText();
+
+            qDebug() << "Updating models for material:" << material << "manufacturer:" << manufacturer;
+
+            modelCombo->clear();
+            modelCombo->addItem("Все модели", "");
+
+            if (!material.isEmpty() && material != "Все типы" &&
+                !manufacturer.isEmpty() && manufacturer != "Все производители") {
+                QStringList models = db->getModelsByMaterialAndManufacturer(material, manufacturer);
+                for (const QString &model : models) {
+                    modelCombo->addItem(model, model);
+                }
+                qDebug() << "Found" << models.size() << "models";
+            }
+            modelCombo->setCurrentIndex(0);
+        };
+
+        connect(materialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                [updateModels](int) { updateModels(); });
+        connect(manufacturerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                [updateModels](int) { updateModels(); });
+    }
+
+    if (dialog.exec() == QDialog::Accepted) {
+        AdvancedFilterDialog::FilterParams params = dialog.getFilterParams();
+
+        qDebug() << "=== Applying filter in MainWindow ===";
+        qDebug() << "material:" << params.materialType;
+        qDebug() << "manufacturer:" << params.manufacturer;
+        qDebug() << "model:" << params.model;
+        qDebug() << "partNumber:" << params.partNumber;
+        qDebug() << "serialNumber:" << params.serialNumber;
+        qDebug() << "status:" << params.status;
+        qDebug() << "useDateRange:" << params.useDateRange;
+        qDebug() << "dateFrom:" << params.dateFrom.toString("dd.MM.yyyy");
+        qDebug() << "dateTo:" << params.dateTo.toString("dd.MM.yyyy");
+
+        // Применяем фильтр
+        QList<QVariantMap> filteredItems = db->getFilteredInventory(
+            params.materialType,
+            params.manufacturer,
+            params.model,
+            params.partNumber,
+            params.serialNumber,
+            params.status,
+            params.useDateRange ? params.dateFrom : QDate(),
+            params.useDateRange ? params.dateTo : QDate()
+        );
+
+        qDebug() << "Filtered items count:" << filteredItems.size();
+        loadInventoryTable(filteredItems);
+
+        // Показываем индикатор активного фильтра
+        if (!params.materialType.isEmpty() || !params.manufacturer.isEmpty() ||
+            !params.model.isEmpty() || !params.partNumber.isEmpty() ||
+            !params.serialNumber.isEmpty() || params.status != "all" ||
+            params.useDateRange) {
+            ui->advancedFilterButton->setText("🔍 Фильтр активен*");
+            ui->advancedFilterButton->setStyleSheet("font-weight: bold; color: blue;");
+        } else {
+            ui->advancedFilterButton->setText("🔍 Расширенный фильтр");
+            ui->advancedFilterButton->setStyleSheet("");
+        }
+    }
+}
+
+
+void MainWindow::refreshStats()
+{
+    if (dashboardWidget) {
+        dashboardWidget->refreshStats();
+    }
+}
+
+
+void MainWindow::about()
+{
+    QMessageBox::about(this, "О программе",
+                       "<h3>Программа для учёта ЗИП v0.13</h3>"
+                       "<p>Приложение для каталогизации материалов и запасных частей</p>"
+                       "<p><b>Возможности:</b><br>"
+                       "✅ Добавление и редактирование записей о комплектующих:<br>"
+                       "• Тип материала (HDD, SSD, ОЗУ, видеокарта и т.д.)<br>"
+                       "• Производитель<br>"
+                       "• Модель<br>"
+                       "• Part Number и серийный номер (необязательный)<br>"
+                       "• Объём и интерфейс (для накопителей и памяти)<br>"
+                       "• Дата поступления и номер накладной<br>"
+                       "• Примечания<br>"
+                       "<p><b>🗑️ Списание и возврат</b><br>"
+                       "<p><b>🔍 Поиск и фильтрация </b><br>"
+                       "<p><b>📊 Отчёты</b><br>"
+                       "<p><b>🌲 Иерархическое дерево материалов</b><br>"
+                       "<p><b>🧩 Гибкая работа со справочниками:  </b><br>"
+                       "• Автоматическое добавление новых типов, производителей и моделей<br>"
+                       "• Поддержка редактируемых выпадающих списков с автодополнением<br>"
+                       "<p><b>Для печати этикеток используется - Qt QR Code Generator Library</b><br>"
+                       "<p><b>Автор:</b><br>"
+                       "• LostDragon (ldragon24@gmail.com)</b></p>");
+}

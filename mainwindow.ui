@@ -26,6 +26,9 @@
       <layout class="QVBoxLayout" name="verticalLayout_2">
        <item>
         <widget class="QLineEdit" name="searchLineEdit">
+         <property name="enabled">
+          <bool>true</bool>
+         </property>
          <property name="placeholderText">
           <string>🔍 Поиск по базе...</string>
          </property>
@@ -346,6 +349,20 @@
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="printLabelsButton">
+            <property name="text">
+             <string>🏷️ Печать этикеток</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="advancedFilterButton">
+            <property name="text">
+             <string>🔍 Расширенный фильтр</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="horizontalSpacer">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>
@@ -385,11 +402,53 @@
         </item>
        </layout>
       </widget>
+      <widget class="QWidget" name="statsTab">
+       <property name="windowTitle">
+        <string>📊 Статистика</string>
+       </property>
+       <attribute name="title">
+        <string>📊 Статистика</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_4">
+        <item>
+         <widget class="DashboardWidget" name="dashboardWidget" native="true"/>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>
   </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1400</width>
+     <height>23</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menu">
+    <property name="title">
+     <string>Меню</string>
+    </property>
+    <addaction name="actionAbout"/>
+   </widget>
+   <addaction name="menu"/>
+  </widget>
+  <action name="actionAbout">
+   <property name="text">
+    <string>О программе</string>
+   </property>
+  </action>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>DashboardWidget</class>
+   <extends>QWidget</extends>
+   <header>dashboardwidget.h</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>
